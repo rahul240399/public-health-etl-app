@@ -2,8 +2,7 @@ import sqlite3
 
 class SqliteHealthRepository:
     """
-    Manages data persistence using a SQLite Star Schema.
-    Handles connections, schema creation, and SQL execution.
+    Manages data persistence using a SQLite Schema.
     """
 
     def __init__(self, db_path="health_data.db"):
@@ -11,25 +10,19 @@ class SqliteHealthRepository:
         self._initialize_database()
 
     def _get_connection(self):
-        """
-        Opens a connection and configures row_factory for dict-like access.
-        """
+        """Opens a connection, enables Foreign Keys, and sets row factory."""
         conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA foreign_keys = ON") # Enforce Foreign Key constraints
         conn.row_factory = sqlite3.Row
         return conn
 
     def close_connection(self):
-        """
-        Placeholder for connection cleanup if connection pooling is added.
-        """
+        """Safe shutdown hook."""
         pass
 
     def _initialize_database(self):
-        """
-        Creates the 'countries' and 'health_facts' tables if they do not exist.
-        """
+        """Creates the Schema tables if they do not exist."""
         with self._get_connection() as conn:
-            # Dimension Table (Reference Data)
             conn.execute('''
                 CREATE TABLE IF NOT EXISTS countries (
                     code TEXT PRIMARY KEY,
@@ -38,7 +31,6 @@ class SqliteHealthRepository:
                 )
             ''')
             
-            # Fact Table (Transactional Data)
             conn.execute('''
                 CREATE TABLE IF NOT EXISTS health_facts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,7 +45,8 @@ class SqliteHealthRepository:
 
     def upsert_country(self, code, name, region="Unknown"):
         """
-        Inserts a new country or updates it if the code already exists.
+        Idempotent Operation: Inserts or Updates country data.
+        Prevents duplicate key errors.
         """
         with self._get_connection() as conn:
             conn.execute(
@@ -63,18 +56,23 @@ class SqliteHealthRepository:
 
     def insert_health_fact(self, country_code, year, sex, value, indicator):
         """
-        Inserts a single health data record into the fact table.
+        Transactional insert of health facts.
+        Edge Case: Silently fails/logs if Foreign Key (Country) is missing.
         """
-        with self._get_connection() as conn:
-            conn.execute('''
-                INSERT INTO health_facts (country_code, year, sex, value, indicator)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (country_code, year, sex, value, indicator))
+        try:
+            with self._get_connection() as conn:
+                conn.execute('''
+                    INSERT INTO health_facts (country_code, year, sex, value, indicator)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (country_code, year, sex, value, indicator))
+        except sqlite3.IntegrityError as e:
+            # Captures "FOREIGN KEY constraint failed"
+            # In a real app, we might log this to a file
+            print(f"[WARNING] Skipped invalid record: {e}")
 
     def fetch_facts_by_year(self, year):
         """
-        Retrieves health facts joined with country names for a specific year.
-        Returns a list of dictionary-like Row objects.
+        Retrieves health facts joined with country names.
         """
         with self._get_connection() as conn:
             cursor = conn.execute('''
